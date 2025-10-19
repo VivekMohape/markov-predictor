@@ -1,6 +1,7 @@
 import re
 import random
 
+# Define possible states
 states = [
     "Ask for Technical Explanation",
     "Request Code Example",
@@ -13,15 +14,17 @@ states = [
     "End/Acknowledge Conversation",
 ]
 
+# Transition probabilities for each state (length matches 'states')
 transition_matrix = {
-    "Ask for Technical Explanation": [0.35, 0.30, 0.15, 0.08, 0.04, 0.03, 0.03, 0.02],
-    "Request Code Example": [0.25, 0.10, 0.45, 0.05, 0.05, 0.05, 0.03, 0.02],
-    "Integrate/Optimize System": [0.30, 0.20, 0.30, 0.10, 0.05, 0.03, 0.02, 0.00],
-    "Career or Relocation Question": [0.15, 0.10, 0.10, 0.40, 0.15, 0.05, 0.03, 0.02],
-    "Learning/Certification Query": [0.20, 0.10, 0.10, 0.15, 0.35, 0.05, 0.03, 0.02],
-    "Upload Another File": [0.40, 0.25, 0.10, 0.05, 0.05, 0.10, 0.03, 0.02],
-    "Request Message/Email Draft": [0.30, 0.10, 0.10, 0.10, 0.05, 0.05, 0.25, 0.05],
-    "Philosophical or Global Inquiry": [0.10, 0.10, 0.15, 0.10, 0.05, 0.05, 0.10, 0.35],
+    "Ask for Technical Explanation":          [0.35, 0.30, 0.15, 0.08, 0.04, 0.03, 0.03, 0.02, 0.00],
+    "Request Code Example":                    [0.25, 0.10, 0.45, 0.05, 0.05, 0.05, 0.03, 0.02, 0.00],
+    "Integrate/Optimize System":              [0.30, 0.20, 0.30, 0.10, 0.05, 0.03, 0.02, 0.00, 0.00],
+    "Career or Relocation Question":          [0.15, 0.10, 0.10, 0.40, 0.15, 0.05, 0.03, 0.02, 0.00],
+    "Learning/Certification Query":           [0.20, 0.10, 0.10, 0.15, 0.35, 0.05, 0.03, 0.02, 0.00],
+    "Upload Another File":                     [0.40, 0.25, 0.10, 0.05, 0.05, 0.10, 0.03, 0.02, 0.00],
+    "Request Message/Email Draft":            [0.30, 0.10, 0.10, 0.10, 0.05, 0.05, 0.25, 0.05, 0.00],
+    "Philosophical or Global Inquiry":        [0.10, 0.10, 0.15, 0.10, 0.05, 0.05, 0.10, 0.35, 0.00],
+    "End/Acknowledge Conversation":           [0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 1.0],
 }
 
 def extract_keywords(text):
@@ -37,18 +40,35 @@ def extract_keywords(text):
     }
 
 def predict_next_action(keywords):
-    """Markov-based prediction logic."""
-    if keywords["ai"] or keywords["data"] or keywords["developer"]:
+    """Markov-based next-action prediction."""
+    
+    # Determine current state based on keywords
+    if keywords.get("ai") or keywords.get("data") or keywords.get("developer"):
         current_state = "Ask for Technical Explanation"
-    elif keywords["research"]:
+    elif keywords.get("research"):
         current_state = "Philosophical or Global Inquiry"
-    elif keywords["student"]:
+    elif keywords.get("student"):
         current_state = "Learning/Certification Query"
-    elif keywords["job"]:
+    elif keywords.get("job"):
         current_state = "Career or Relocation Question"
     else:
         current_state = random.choice(list(transition_matrix.keys()))
-
-    probs = transition_matrix[current_state]
+    
+    # Get probability list and ensure it matches the states length
+    probs = transition_matrix.get(current_state, [1.0/len(states)]*len(states))
+    if len(probs) < len(states):
+        probs += [0.0] * (len(states) - len(probs))  # pad missing probabilities
+    
+    # Pick next state based on probabilities
     next_state = random.choices(states, weights=probs, k=1)[0]
+    
     return current_state, next_state, probs, states
+
+# Example usage
+if __name__ == "__main__":
+    sample_text = "I am a student learning AI and data science."
+    keywords = extract_keywords(sample_text)
+    current, next_action, probs, all_states = predict_next_action(keywords)
+    print("Current State:", current)
+    print("Predicted Next State:", next_action)
+    print("Probabilities:", probs)
