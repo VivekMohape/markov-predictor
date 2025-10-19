@@ -14,7 +14,7 @@ This app reads your uploaded PDF (like a résumé or profile), identifies contex
 and predicts your most likely *next action* using a Markov model + natural language summary.
 
 ---
-### 🪄 How to Use
+###  How to Use
 1. **Upload a PDF file** (e.g., résumé, project report, or document with text).  
 2. Click ** Predict Next Action**.  
 3. View:
