@@ -6,7 +6,7 @@ def generate_description(current_state, next_state, keywords):
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", None)
     if not GROQ_API_KEY:
         st.error("⚠️ Missing GROQ_API_KEY in Streamlit secrets.")
-        return ""
+        return "AI summary not available."
 
     prompt = (
         "You are an assistant summarizing Markov-based user predictions.\n"
@@ -21,22 +21,20 @@ def generate_description(current_state, next_state, keywords):
         "Content-Type": "application/json"
     }
 
+    # Updated body for text-completion model (not chat)
     body = {
-        "model": "llama3-8b-8192",  # you can switch to mixtral-8x7b-32768 if desired
-        "messages": [
-            {"role": "system", "content": "You are a friendly assistant writing short insights."},
-            {"role": "user", "content": prompt}
-        ],
+        "model": "openai/gpt-oss-120b",
+        "prompt": prompt,
         "temperature": 0.7,
         "max_tokens": 150
     }
 
     try:
-        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=25)
+        resp = requests.post("https://api.groq.com/v1/completions", headers=headers, json=body, timeout=60)
         resp.raise_for_status()
         data = resp.json()
-        paragraph = data["choices"][0]["message"]["content"]
+        paragraph = data["choices"][0]["text"]  # use 'text' for completion models
         return paragraph.strip()
     except Exception as e:
         st.error(f"❌ Groq request failed: {e}")
-        return ""
+        return "AI summary not available."
