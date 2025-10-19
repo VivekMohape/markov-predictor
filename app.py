@@ -7,7 +7,7 @@ from utils.llm_utils import generate_description
 # Page Setup
 st.set_page_config(page_title="Markov Predictor", page_icon="🤖", layout="wide")
 
-st.title("🤖 Markov Chain Next-Action Predictor")
+st.title(" Markov Chain Next-Action Predictor")
 st.markdown("""
 Welcome to the **Markov Chain Predictor App** powered by **Groq AI** and open-source LLMs.
 This app reads your uploaded PDF (like a résumé or profile), identifies context,  
@@ -16,7 +16,7 @@ and predicts your most likely *next action* using a Markov model + natural langu
 ---
 ### 🪄 How to Use
 1. **Upload a PDF file** (e.g., résumé, project report, or document with text).  
-2. Click **🔮 Predict Next Action**.  
+2. Click ** Predict Next Action**.  
 3. View:
    - Extracted keywords from your document  
    - Current inferred state  
@@ -41,7 +41,7 @@ if uploaded_file:
 
         st.markdown("---")
         st.subheader("🎯 Prediction")
-        if st.button("🔮 Predict Next Action", use_container_width=True, type="primary"):
+        if st.button(" Predict Next Action", use_container_width=True, type="primary"):
             with st.spinner("Running Markov chain prediction..."):
                 current_state, next_state, probs, states = predict_next_action(keywords)
 
@@ -71,4 +71,4 @@ else:
     st.info("Please upload a PDF document to begin the prediction.")
 
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit, Markov Chains, and Groq OSS models.")
+st.caption("Built with Markov Chains by Vivek Mohape.")
