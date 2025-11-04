@@ -81,11 +81,12 @@ def _try_parse_json(raw_text: str):
 
 def polish_output(text):
     """
-    Uses Groq LLM to lightly polish explanation.
-    Falls back safely if the model returns instructions or empty text.
+    Final version: robust polishing with self-healing fallback.
+    Prevents meta/instructional echoes like '97 words. Good.'
+    and ensures at least one natural paragraph is returned.
     """
-    if not text or len(text.strip()) < 30:
-        return text
+    if not text or len(text.strip()) < 40:
+        return text  # skip trivial content
 
     try:
         key = st.secrets.get("GROQ_API_KEY")
@@ -93,36 +94,62 @@ def polish_output(text):
             return text
 
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+        # ✅ Use neutral, non-instructional phrasing to avoid echoing
         body = {
             "model": MODEL,
             "input": (
-                "Improve flow and punctuation of the paragraph below. "
-                "Keep meaning identical. Output only the corrected paragraph, no explanations.\n\n"
+                "Rewrite the following paragraph slightly to improve flow, grammar, and tone. "
+                "Keep the same meaning and style. "
+                "Output ONLY the improved paragraph.\n\n"
                 f"{text}"
             ),
         }
 
-        r = requests.post(GROQ_URL, headers=headers, json=body, timeout=30)
+        r = requests.post(GROQ_URL, headers=headers, json=body, timeout=40)
         r.raise_for_status()
         data = r.json()
 
         refined = ""
         if "output_text" in data and data["output_text"]:
             refined = data["output_text"].strip()
-        elif "output" in data and len(data["output"]) > 0:
+        elif "output" in data and data["output"]:
             refined = data["output"][0]["content"][0]["text"].strip()
 
-        # 🧹 Clean up meta or instruction echoes
-        if not refined or re.match(r"^(check|ensure|return only|good|ok|fine)", refined.lower()):
-            return text  # revert to original explanation
+        # 🧹 Remove meta/instruction echoes
+        if not refined or re.match(
+            r"^(check|ensure|return only|good|ok|fine|provide only|97 words)", 
+            refined.lower()
+        ):
+            # fallback retry with minimal prompt
+            fallback = {
+                "model": MODEL,
+                "input": (
+                    f"Polish grammar and punctuation. Output only paragraph:\n{text}"
+                )
+            }
+            r2 = requests.post(GROQ_URL, headers=headers, json=fallback, timeout=30)
+            r2.raise_for_status()
+            data2 = r2.json()
+            if "output_text" in data2 and data2["output_text"]:
+                refined = data2["output_text"].strip()
+            elif "output" in data2 and data2["output"]:
+                refined = data2["output"][0]["content"][0]["text"].strip()
+            else:
+                refined = text
 
-        # Keep only last coherent paragraph
-        refined = refined.split("\n\n")[-1].strip()
+        # If still not a paragraph, fallback entirely
+        if not refined or len(refined.split()) < 40:
+            refined = text
+
+        # Keep last coherent block only
+        refined = refined.strip().split("\n\n")[-1].strip()
         return refined
 
     except Exception as e:
-        st.warning(f"⚠️ Polish skipped: {e}")
+        st.warning(f"⚠️ Polish skipped due to error: {e}")
         return text
+
 
 # -------------------------------------------------------------
 # Universal Predictor
