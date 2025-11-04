@@ -80,7 +80,10 @@ def _try_parse_json(raw_text: str):
 
 
 def polish_output(text):
-    """Lightly polish the explanation for readability and tone."""
+    """
+    Uses Groq LLM to lightly polish explanation.
+    Falls back safely if the model returns instructions or empty text.
+    """
     if not text or len(text.strip()) < 30:
         return text
 
@@ -88,32 +91,37 @@ def polish_output(text):
         key = st.secrets.get("GROQ_API_KEY")
         if not key:
             return text
+
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         body = {
             "model": MODEL,
             "input": (
-                "Polish the following paragraph for clarity, flow, and tone. "
-                "Preserve meaning, do not shorten excessively or add content. "
-                "Return only the refined paragraph.\n\n"
+                "Improve flow and punctuation of the paragraph below. "
+                "Keep meaning identical. Output only the corrected paragraph, no explanations.\n\n"
                 f"{text}"
             ),
         }
+
         r = requests.post(GROQ_URL, headers=headers, json=body, timeout=30)
         r.raise_for_status()
         data = r.json()
 
         refined = ""
-        if "output_text" in data:
+        if "output_text" in data and data["output_text"]:
             refined = data["output_text"].strip()
         elif "output" in data and len(data["output"]) > 0:
             refined = data["output"][0]["content"][0]["text"].strip()
-        else:
-            refined = text
 
+        # 🧹 Clean up meta or instruction echoes
+        if not refined or re.match(r"^(check|ensure|return only|good|ok|fine)", refined.lower()):
+            return text  # revert to original explanation
+
+        # Keep only last coherent paragraph
         refined = refined.split("\n\n")[-1].strip()
         return refined
+
     except Exception as e:
-        st.warning(f"⚠️ Output polish skipped: {e}")
+        st.warning(f"⚠️ Polish skipped: {e}")
         return text
 
 # -------------------------------------------------------------
