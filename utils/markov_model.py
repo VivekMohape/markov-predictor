@@ -1,27 +1,20 @@
 import re
 import random
 
-# ------------------------------------------------------------
-# 🧩 Utility Functions
-# ------------------------------------------------------------
 def build_uniform_matrix(states):
-    """Create a uniform probability transition matrix for the given states."""
+    """Creates a uniform probability transition matrix."""
     n = len(states)
     if n == 0:
         return []
     matrix = []
     for i in range(n):
-        # Initially equal probability to move to any state
         probs = [1.0 / n] * n
         matrix.append(probs)
     return matrix
 
 
 def _detect_intent(text):
-    """
-    Detects user intent (past / present / future orientation)
-    based on keywords in input text.
-    """
+    """Detect user intent based on text content."""
     t = text.lower()
     if re.search(r"\b(will|plan|next|future|forecast|goal|target|expect)\b", t):
         return "future"
@@ -32,50 +25,32 @@ def _detect_intent(text):
     return "neutral"
 
 
-# ------------------------------------------------------------
-# 🧮 Core Markov Predictor
-# ------------------------------------------------------------
 def predict_next_state(states, matrix, current_state, text=None, deterministic=True):
-    """
-    Predicts the next likely state based on current_state.
-    - Removes self-loops unless it's the final state.
-    - Optionally shifts state based on user intent (future/past).
-    """
+    """Markov prediction aware of user intent and prevents self-loops."""
     result = {}
     try:
         if not states or current_state not in states:
-            raise ValueError("Invalid state or missing state list.")
+            raise ValueError("Invalid or missing states.")
 
         idx = states.index(current_state)
         probs = matrix[idx][:]
 
-        # Handle user intent (future, past, etc.)
+        # Adjust based on intent
         if text:
             intent = _detect_intent(text)
-            if intent == "future":
-                # Nudge the model forward one step
-                if idx < len(states) - 1:
-                    idx += 1
-                    current_state = states[idx]
-            elif intent == "past":
-                # Nudge backward one step (for retrospective phrasing)
-                if idx > 0:
-                    idx -= 1
-                    current_state = states[idx]
-            # "present" or "neutral" -> no change
+            if intent == "future" and idx < len(states) - 1:
+                idx += 1
+                current_state = states[idx]
+            elif intent == "past" and idx > 0:
+                idx -= 1
+                current_state = states[idx]
 
-        # Remove self-loop probability except for final state
+        # Remove self-loop unless final state
         if idx < len(states) - 1:
             probs[idx] = 0.0
-
-        # Normalize probabilities
         total = sum(probs)
-        if total == 0:
-            probs = [1.0 / len(states)] * len(states)
-        else:
-            probs = [p / total for p in probs]
+        probs = [p / total for p in probs] if total > 0 else [1.0 / len(states)] * len(states)
 
-        # Choose next state deterministically or randomly
         next_state = states[probs.index(max(probs))] if deterministic else random.choices(states, weights=probs, k=1)[0]
 
         result = {
