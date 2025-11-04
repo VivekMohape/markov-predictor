@@ -27,19 +27,39 @@ def _safe_call(prompt, timeout=60):
     return r.json()
 
 def _extract_text(resp_json):
-    """Extract main text content from Groq response object."""
+    """Extracts the main text content and trims reasoning or meta lines."""
     if not resp_json:
         return ""
+    text = ""
     if "output_text" in resp_json and resp_json["output_text"]:
-        return resp_json["output_text"].strip()
-    if "output" in resp_json and resp_json["output"]:
-        pieces = []
+        text = resp_json["output_text"].strip()
+    elif "output" in resp_json and resp_json["output"]:
+        parts = []
         for item in resp_json["output"]:
             for c in item.get("content", []):
                 if "text" in c:
-                    pieces.append(c["text"])
-        return "\n".join(pieces).strip()
-    return str(resp_json)
+                    parts.append(c["text"])
+        text = "\n".join(parts).strip()
+    else:
+        text = str(resp_json)
+
+    # 🧹 Trim meta-reasoning (lines starting with "We need", "Let's", "So we should", etc.)
+    import re
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        if re.match(r"^\s*(we need|let'?s|so we|our task|we should|the goal|the user asks)", line.strip(), re.I):
+            continue
+        cleaned.append(line)
+    text = " ".join(cleaned).strip()
+
+    # Keep only the last full paragraph (most likely the real answer)
+    paragraphs = re.split(r"\n{2,}", text)
+    if len(paragraphs) > 1:
+        text = paragraphs[-1].strip()
+
+    return text
+
 
 def _try_parse_json(raw_text):
     """
