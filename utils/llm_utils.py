@@ -1,4 +1,3 @@
-# utils/llm_utils.py
 import streamlit as st
 import requests
 import json
@@ -7,16 +6,16 @@ import traceback
 from utils import markov_model
 
 # -------------------------------------------------------------
-# 🔑  Configuration
+# Configuration
 # -------------------------------------------------------------
 GROQ_URL = "https://api.groq.com/openai/v1/responses"
 MODEL = "openai/gpt-oss-20b"
 
 # -------------------------------------------------------------
-# ⚙️  Helper Functions
+# Helper Functions
 # -------------------------------------------------------------
 def _safe_call(prompt, timeout=60):
-    """Send a request to the Groq API and handle HTTP errors gracefully."""
+    """Send a request to Groq API safely."""
     key = st.secrets.get("GROQ_API_KEY")
     if not key:
         raise RuntimeError("⚠️ Missing GROQ_API_KEY in Streamlit secrets.")
@@ -26,8 +25,9 @@ def _safe_call(prompt, timeout=60):
     r.raise_for_status()
     return r.json()
 
+
 def _extract_text(resp_json):
-    """Extracts the main text content and trims reasoning or meta lines."""
+    """Extracts clean main text and trims meta reasoning."""
     if not resp_json:
         return ""
     text = ""
@@ -43,8 +43,7 @@ def _extract_text(resp_json):
     else:
         text = str(resp_json)
 
-    # 🧹 Trim meta-reasoning (lines starting with "We need", "Let's", "So we should", etc.)
-    import re
+    # Remove meta lines like "We need to...", "Let's..."
     lines = text.splitlines()
     cleaned = []
     for line in lines:
@@ -53,70 +52,93 @@ def _extract_text(resp_json):
         cleaned.append(line)
     text = " ".join(cleaned).strip()
 
-    # Keep only the last full paragraph (most likely the real answer)
+    # Keep only last paragraph
     paragraphs = re.split(r"\n{2,}", text)
     if len(paragraphs) > 1:
         text = paragraphs[-1].strip()
-
     return text
 
+
 def _try_parse_json(raw_text: str):
-    """
-    Extract the last valid JSON object or array from the model output.
-    Handles commentary or reasoning appended before/after JSON.
-    """
-    import re, json
+    """Extracts last valid JSON block from LLM output."""
+    import json, re
     if not raw_text or not isinstance(raw_text, str):
         return None
 
-    # 🔍 Extract all JSON-like blocks (object or array)
     candidates = re.findall(r"(\{.*?\}|\[.*?\])", raw_text, re.DOTALL)
-
     if not candidates:
         return None
 
-    # Try parsing from last to first — newest is usually cleanest
     for block in reversed(candidates):
         try:
             parsed = json.loads(block)
-            # Must look like our schema
             if isinstance(parsed, dict) and "states" in parsed and "current_state" in parsed:
                 return parsed
         except json.JSONDecodeError:
             continue
-
     return None
 
 
+def polish_output(text):
+    """Lightly polish the explanation for readability and tone."""
+    if not text or len(text.strip()) < 30:
+        return text
+
+    try:
+        key = st.secrets.get("GROQ_API_KEY")
+        if not key:
+            return text
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        body = {
+            "model": MODEL,
+            "input": (
+                "Polish the following paragraph for clarity, flow, and tone. "
+                "Preserve meaning, do not shorten excessively or add content. "
+                "Return only the refined paragraph.\n\n"
+                f"{text}"
+            ),
+        }
+        r = requests.post(GROQ_URL, headers=headers, json=body, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+
+        refined = ""
+        if "output_text" in data:
+            refined = data["output_text"].strip()
+        elif "output" in data and len(data["output"]) > 0:
+            refined = data["output"][0]["content"][0]["text"].strip()
+        else:
+            refined = text
+
+        refined = refined.split("\n\n")[-1].strip()
+        return refined
+    except Exception as e:
+        st.warning(f"⚠️ Output polish skipped: {e}")
+        return text
+
 # -------------------------------------------------------------
-# 🧠  Core Predictor
+# Universal Predictor
 # -------------------------------------------------------------
 def universal_predictor(user_text):
-    """
-    Universal LLM + Markov hybrid predictor.
-    Handles arbitrary text domains (career, finance, health, learning, etc.).
-    """
+    """Universal Markov + LLM hybrid predictor."""
     result = {"input": user_text}
     try:
-        # --- 1️⃣ Ask LLM to identify domain, states, and current state
+        # Step 1: Ask Groq for domain, states, and current state
         prompt = (
             "Analyze this input and respond strictly in JSON format with keys:\n"
-            "'domain': short string (e.g., 'career', 'finance', 'health', 'learning', 'other'),\n"
+            "'domain': short string (career, finance, learning, health, etc.),\n"
             "'states': ordered list (4–8 progressive states relevant to the context),\n"
             "'current_state': one of the states that best matches current situation.\n\n"
-            "Return ONLY JSON. The first character of your response must be '{'.\n\n"
+            "Return ONLY JSON. The first character must be '{'.\n\n"
             f"Input:\n{user_text}"
         )
         j = _safe_call(prompt)
         raw = _extract_text(j)
         parsed = _try_parse_json(raw)
 
-        # If parsing failed, attempt a repair prompt
+        # Retry with repair if malformed
         if not parsed:
-            repair_prompt = (
-                f"The following output is not valid JSON:\n{raw}\n\n"
-                "Reformat it strictly as valid JSON. Do not add any explanation."
-            )
+            repair_prompt = f"The following output is invalid JSON:\n{raw}\n\nReformat strictly as JSON."
             j2 = _safe_call(repair_prompt)
             raw2 = _extract_text(j2)
             parsed = _try_parse_json(raw2)
@@ -127,28 +149,31 @@ def universal_predictor(user_text):
         states = parsed.get("states", [])
         current = parsed.get("current_state")
         if not states or not current:
-            raise ValueError(f"LLM JSON missing 'states' or 'current_state':\n{parsed}")
+            raise ValueError(f"LLM JSON missing required fields:\n{parsed}")
 
-        # --- 2️⃣ Markov step: predict next probable state
+        # Step 2: Markov prediction
         matrix = markov_model.build_uniform_matrix(states)
-        pred = markov_model.predict_next_state(states, matrix, current, deterministic=True)
+        pred = markov_model.predict_next_state(states, matrix, current, text=user_text, deterministic=True)
         if "error" in pred:
             raise RuntimeError(pred["error"])
         next_state = pred["next_state"]
 
-        # --- 3️⃣ Ask LLM for contextual explanation
+        # Step 3: Ask for explanation
         explain_prompt = (
             f"Domain: {parsed.get('domain')}\n"
             f"Current state: {current}\nNext state: {next_state}\n\n"
             f"User text:\n{user_text}\n\n"
-            "Write one clear paragraph (80–120 words) explaining naturally "
-            "why moving from the current state to the next state makes sense. "
-            "Avoid mentioning tasks or instructions; sound human and insightful."
+            "Write one clear paragraph (80–120 words) explaining naturally why "
+            "moving from the current state to the next state makes sense. "
+            "Avoid instructions or self-reference."
         )
         j3 = _safe_call(explain_prompt)
         explanation = _extract_text(j3)
 
-        # --- 4️⃣ Return structured result
+        # Step 4: Optional polish
+        explanation = polish_output(explanation)
+
+        # Final result
         result.update({
             "domain": parsed.get("domain"),
             "states": states,
