@@ -21,19 +21,23 @@ def generate_description(current_state, next_state, keywords):
         "Content-Type": "application/json"
     }
 
-    # Updated body for text-completion model (not chat)
+    # ✅ Correct endpoint + chat-style format
     body = {
-        "model": "openai/gpt-oss-120b",
-        "prompt": prompt,
+        "model": "openai/gpt-oss-120b",  # Groq OSS chat-compatible model
+        "messages": [
+            {"role": "system", "content": "You are a friendly assistant writing short insights."},
+            {"role": "user", "content": prompt}
+        ],
         "temperature": 0.7,
         "max_tokens": 150
     }
 
     try:
-        resp = requests.post("https://api.groq.com/v1/completions", headers=headers, json=body, timeout=60)
+        # ✅ Correct endpoint for Groq (chat format)
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=60)
         resp.raise_for_status()
         data = resp.json()
-        paragraph = data["choices"][0]["text"]  # use 'text' for completion models
+        paragraph = data["choices"][0]["message"]["content"]
         return paragraph.strip()
     except Exception as e:
         st.error(f"❌ Groq request failed: {e}")
