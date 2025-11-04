@@ -4,7 +4,7 @@ from utils.pdf_utils import extract_text_from_pdf
 
 st.set_page_config(page_title="Markov Predictor", layout="wide")
 
-st.title("🔮 Universal Next-State Predictor")
+st.title("Markov Next-State Predictor")
 st.markdown("""
 This app blends **Markov reasoning** with **Groq OSS LLMs** to predict your **next likely milestone**  
 from any input: a résumé, financial plan, learning goal, or health update.
