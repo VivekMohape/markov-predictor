@@ -1,6 +1,6 @@
 
 
-# Universal Next-State Predictor
+# Markov Next-State Predictor
 
 Live Demo: [https://markov-predictor.streamlit.app/](https://markov-predictor.streamlit.app/)
 
@@ -8,7 +8,7 @@ Live Demo: [https://markov-predictor.streamlit.app/](https://markov-predictor.st
 
 ## Overview
 
-Universal Next-State Predictor is a Streamlit-based web application that blends **Markov chain modeling** with **Groq open-source large language models** to predict the most likely next state, milestone, or action for any kind of input.
+Markov Next-State Predictor is a Streamlit-based web application that blends **Markov chain modeling** with **Groq open-source large language models** to predict the most likely next state, milestone, or action for any kind of input.
 
 It can analyze résumés, personal statements, financial plans, learning goals, or any natural-language text, infer your current situation, predict what comes next, and provide a concise, human-like explanation paragraph.
 
