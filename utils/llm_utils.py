@@ -12,10 +12,9 @@ GROQ_URL = "https://api.groq.com/openai/v1/responses"
 MODEL = "openai/gpt-oss-20b"
 
 # -------------------------------------------------------------
-# Helper Functions
+# Helper: call Groq safely
 # -------------------------------------------------------------
 def _safe_call(prompt, timeout=60):
-    """Send a request to Groq API safely."""
     key = st.secrets.get("GROQ_API_KEY")
     if not key:
         raise RuntimeError("⚠️ Missing GROQ_API_KEY in Streamlit secrets.")
@@ -25,50 +24,53 @@ def _safe_call(prompt, timeout=60):
     r.raise_for_status()
     return r.json()
 
-
+# -------------------------------------------------------------
+# Extract clean text from Groq response
+# -------------------------------------------------------------
 def _extract_text(resp_json):
-    """Extracts clean main text and trims meta reasoning."""
+    """Extracts meaningful paragraph text from various Groq response formats."""
     if not resp_json:
         return ""
     text = ""
-    if "output_text" in resp_json and resp_json["output_text"]:
-        text = resp_json["output_text"].strip()
-    elif "output" in resp_json and resp_json["output"]:
-        parts = []
-        for item in resp_json["output"]:
-            for c in item.get("content", []):
-                if "text" in c:
-                    parts.append(c["text"])
-        text = "\n".join(parts).strip()
-    else:
-        text = str(resp_json)
 
-    # Remove meta lines like "We need to...", "Let's..."
+    # Handle Groq's multiple formats
+    if isinstance(resp_json, dict):
+        if "output_text" in resp_json and resp_json["output_text"]:
+            text = resp_json["output_text"].strip()
+        elif "output" in resp_json:
+            segments = []
+            for block in resp_json["output"]:
+                for c in block.get("content", []):
+                    if "text" in c:
+                        segments.append(c["text"])
+            text = "\n".join(segments).strip()
+    elif isinstance(resp_json, str):
+        text = resp_json.strip()
+
+    # Clean up LLM reasoning/meta lines
     lines = text.splitlines()
-    cleaned = []
+    filtered = []
     for line in lines:
-        if re.match(r"^\s*(we need|let'?s|so we|our task|we should|the goal|the user asks)", line.strip(), re.I):
+        if re.match(r"^(we need|let'?s|so we|our task|they want|provide only|ensure|check clarity|97 words)", line.strip(), re.I):
             continue
-        cleaned.append(line)
-    text = " ".join(cleaned).strip()
+        filtered.append(line)
+    text = " ".join(filtered).strip()
 
-    # Keep only last paragraph
+    # Keep last coherent paragraph
     paragraphs = re.split(r"\n{2,}", text)
     if len(paragraphs) > 1:
         text = paragraphs[-1].strip()
+
     return text
 
-
-def _try_parse_json(raw_text: str):
-    """Extracts last valid JSON block from LLM output."""
-    import json, re
+# -------------------------------------------------------------
+# Try parsing JSON from model output
+# -------------------------------------------------------------
+def _try_parse_json(raw_text):
+    """Extract the last valid JSON block from a possibly messy LLM output."""
     if not raw_text or not isinstance(raw_text, str):
         return None
-
     candidates = re.findall(r"(\{.*?\}|\[.*?\])", raw_text, re.DOTALL)
-    if not candidates:
-        return None
-
     for block in reversed(candidates):
         try:
             parsed = json.loads(block)
@@ -78,15 +80,13 @@ def _try_parse_json(raw_text: str):
             continue
     return None
 
-
+# -------------------------------------------------------------
+# Polishing layer with self-healing
+# -------------------------------------------------------------
 def polish_output(text):
-    """
-    Final version: robust polishing with self-healing fallback.
-    Prevents meta/instructional echoes like '97 words. Good.'
-    and ensures at least one natural paragraph is returned.
-    """
+    """Polish paragraph clarity and tone with Groq, fallback-safe."""
     if not text or len(text.strip()) < 40:
-        return text  # skip trivial content
+        return text
 
     try:
         key = st.secrets.get("GROQ_API_KEY")
@@ -94,127 +94,107 @@ def polish_output(text):
             return text
 
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-
-        # ✅ Use neutral, non-instructional phrasing to avoid echoing
         body = {
             "model": MODEL,
             "input": (
-                "Rewrite the following paragraph slightly to improve flow, grammar, and tone. "
-                "Keep the same meaning and style. "
-                "Output ONLY the improved paragraph.\n\n"
+                "Rewrite the following paragraph naturally with smoother grammar and punctuation. "
+                "Keep the same meaning. Return ONLY the improved paragraph.\n\n"
                 f"{text}"
             ),
         }
 
-        r = requests.post(GROQ_URL, headers=headers, json=body, timeout=40)
+        r = requests.post(GROQ_URL, headers=headers, json=body, timeout=30)
         r.raise_for_status()
         data = r.json()
 
         refined = ""
         if "output_text" in data and data["output_text"]:
             refined = data["output_text"].strip()
-        elif "output" in data and data["output"]:
+        elif "output" in data and len(data["output"]) > 0:
             refined = data["output"][0]["content"][0]["text"].strip()
 
-        # 🧹 Remove meta/instruction echoes
-        if not refined or re.match(
-            r"^(check|ensure|return only|good|ok|fine|provide only|97 words)", 
-            refined.lower()
-        ):
-            # fallback retry with minimal prompt
-            fallback = {
-                "model": MODEL,
-                "input": (
-                    f"Polish grammar and punctuation. Output only paragraph:\n{text}"
-                )
-            }
-            r2 = requests.post(GROQ_URL, headers=headers, json=fallback, timeout=30)
-            r2.raise_for_status()
-            data2 = r2.json()
-            if "output_text" in data2 and data2["output_text"]:
-                refined = data2["output_text"].strip()
-            elif "output" in data2 and data2["output"]:
-                refined = data2["output"][0]["content"][0]["text"].strip()
-            else:
-                refined = text
-
-        # If still not a paragraph, fallback entirely
-        if not refined or len(refined.split()) < 40:
+        # Filter out meta echoes
+        if not refined or re.match(r"^(check|ensure|return only|good|ok|fine|provide only|97 words)", refined.lower()):
             refined = text
 
-        # Keep last coherent block only
-        refined = refined.strip().split("\n\n")[-1].strip()
+        refined = refined.split("\n\n")[-1].strip()
+        if len(refined.split()) < 40:
+            refined = text  # revert if too short
+
         return refined
 
     except Exception as e:
-        st.warning(f"⚠️ Polish skipped due to error: {e}")
+        st.warning(f"⚠️ Polish skipped: {e}")
         return text
-
 
 # -------------------------------------------------------------
 # Universal Predictor
 # -------------------------------------------------------------
 def universal_predictor(user_text):
-    """Universal Markov + LLM hybrid predictor."""
+    """Universal LLM + Markov prediction pipeline with explanation fallback."""
     result = {"input": user_text}
     try:
-        # Step 1: Ask Groq for domain, states, and current state
+        # 1️⃣ Domain + States + Current
         prompt = (
             "Analyze this input and respond strictly in JSON format with keys:\n"
-            "'domain': short string (career, finance, learning, health, etc.),\n"
-            "'states': ordered list (4–8 progressive states relevant to the context),\n"
-            "'current_state': one of the states that best matches current situation.\n\n"
-            "Return ONLY JSON. The first character must be '{'.\n\n"
+            "'domain': (career, finance, learning, health, etc.),\n"
+            "'states': ordered list (4–8 logical progression states),\n"
+            "'current_state': one of the states that matches current situation.\n\n"
+            "Return ONLY JSON (first character must be '{').\n\n"
             f"Input:\n{user_text}"
         )
         j = _safe_call(prompt)
         raw = _extract_text(j)
         parsed = _try_parse_json(raw)
 
-        # Retry with repair if malformed
         if not parsed:
-            repair_prompt = f"The following output is invalid JSON:\n{raw}\n\nReformat strictly as JSON."
+            repair_prompt = f"Reformat this to valid JSON only:\n{raw}"
             j2 = _safe_call(repair_prompt)
             raw2 = _extract_text(j2)
             parsed = _try_parse_json(raw2)
 
         if not parsed:
-            raise ValueError(f"Groq returned non-JSON or empty output:\n{raw}")
+            raise ValueError(f"Groq returned non-JSON output:\n{raw}")
 
         states = parsed.get("states", [])
         current = parsed.get("current_state")
         if not states or not current:
-            raise ValueError(f"LLM JSON missing required fields:\n{parsed}")
+            raise ValueError("Missing states or current_state in JSON.")
 
-        # Step 2: Markov prediction
+        # 2️⃣ Predict next state using Markov logic
         matrix = markov_model.build_uniform_matrix(states)
         pred = markov_model.predict_next_state(states, matrix, current, text=user_text, deterministic=True)
-        if "error" in pred:
-            raise RuntimeError(pred["error"])
-        next_state = pred["next_state"]
+        next_state = pred.get("next_state", states[-1])
 
-        # Step 3: Ask for explanation
+        # 3️⃣ Generate explanation
         explain_prompt = (
             f"Domain: {parsed.get('domain')}\n"
             f"Current state: {current}\nNext state: {next_state}\n\n"
             f"User text:\n{user_text}\n\n"
-            "Write one clear paragraph (80–120 words) explaining naturally why "
-            "moving from the current state to the next state makes sense. "
-            "Avoid instructions or self-reference."
+            "Write one paragraph (80–120 words) explaining naturally why moving "
+            "from the current state to the next state makes sense. Avoid instructions or meta talk."
         )
         j3 = _safe_call(explain_prompt)
         explanation = _extract_text(j3)
 
-        # Step 4: Optional polish
+        # Retry fallback if empty or meta
+        if not explanation or len(explanation.split()) < 40:
+            retry_prompt = (
+                f"Summarize why transitioning from '{current}' to '{next_state}' is logical, "
+                f"based on this user text:\n{user_text}\n\nReturn one clear paragraph (80–120 words)."
+            )
+            j4 = _safe_call(retry_prompt)
+            explanation = _extract_text(j4)
+
         explanation = polish_output(explanation)
 
-        # Final result
+        # ✅ Final result
         result.update({
             "domain": parsed.get("domain"),
             "states": states,
             "current_state": current,
             "predicted_next_state": next_state,
-            "explanation": explanation,
+            "explanation": explanation or "No explanation generated."
         })
 
     except Exception as e:
