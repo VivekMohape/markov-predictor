@@ -60,32 +60,33 @@ def _extract_text(resp_json):
 
     return text
 
-
-def _try_parse_json(raw_text):
+def _try_parse_json(raw_text: str):
     """
-    Robust JSON parser that extracts the first valid JSON block from an LLM response.
-    Works even if the response has text before/after the JSON.
+    Extract the last valid JSON object or array from the model output.
+    Handles commentary or reasoning appended before/after JSON.
     """
+    import re, json
     if not raw_text or not isinstance(raw_text, str):
         return None
 
-    # Extract {...} block
-    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
+    # 🔍 Extract all JSON-like blocks (object or array)
+    candidates = re.findall(r"(\{.*?\}|\[.*?\])", raw_text, re.DOTALL)
 
-    # Extract [...] block
-    match = re.search(r"\[.*\]", raw_text, re.DOTALL)
-    if match:
+    if not candidates:
+        return None
+
+    # Try parsing from last to first — newest is usually cleanest
+    for block in reversed(candidates):
         try:
-            return json.loads(match.group())
+            parsed = json.loads(block)
+            # Must look like our schema
+            if isinstance(parsed, dict) and "states" in parsed and "current_state" in parsed:
+                return parsed
         except json.JSONDecodeError:
-            pass
+            continue
 
     return None
+
 
 # -------------------------------------------------------------
 # 🧠  Core Predictor
