@@ -2,18 +2,19 @@ import streamlit as st
 import requests
 
 def generate_description(current_state, next_state, keywords):
-    """Generate human-readable explanation using Groq OSS model."""
+    """Generate human-readable explanation using Groq OSS model (responses.create style)."""
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", None)
     if not GROQ_API_KEY:
         st.error("⚠️ Missing GROQ_API_KEY in Streamlit secrets.")
         return "AI summary not available."
 
+    # Compose prompt text
     prompt = (
-        "You are an assistant summarizing Markov-based user predictions.\n"
         f"Current state: {current_state}\n"
         f"Predicted next action: {next_state}\n"
         f"Detected keywords: {', '.join([k for k, v in keywords.items() if v]) or 'None'}\n\n"
-        "Write a short, clear paragraph (around 100 words) explaining what this next action means for the user."
+        "Explain what this next action means for the user in about 100 words, "
+        "using simple and natural language."
     )
 
     headers = {
@@ -21,28 +22,30 @@ def generate_description(current_state, next_state, keywords):
         "Content-Type": "application/json"
     }
 
+    # ✅ Using Groq’s new responses.create API
     body = {
-        # ✅ Chat-compatible model name
-        "model": "gpt-oss-120b",  # or use "llama3-8b-8192" for lighter/faster responses
-        "messages": [
-            {"role": "system", "content": "You are a friendly assistant writing short insights."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.7,
-        "max_tokens": 150
+        "model": "openai/gpt-oss-20b",  # updated per your reference
+        "input": prompt
     }
 
     try:
-        # ✅ Correct endpoint (not /v1/completions)
         resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            "https://api.groq.com/openai/v1/responses",
             headers=headers,
             json=body,
             timeout=60
         )
         resp.raise_for_status()
         data = resp.json()
-        paragraph = data["choices"][0]["message"]["content"]
+
+        # ✅ Extract final text output from responses.create structure
+        if "output" in data and len(data["output"]) > 0:
+            paragraph = data["output"][0]["content"][0]["text"]
+        elif "output_text" in data:
+            paragraph = data["output_text"]
+        else:
+            paragraph = "No AI output received."
+
         return paragraph.strip()
 
     except Exception as e:
