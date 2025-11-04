@@ -10,12 +10,13 @@ def generate_description(current_state, next_state, keywords):
 
     # Compose prompt text
     prompt = (
-        f"Current state: {current_state}\n"
-        f"Predicted next action: {next_state}\n"
-        f"Detected keywords: {', '.join([k for k, v in keywords.items() if v]) or 'None'}\n\n"
-        "Explain what this next action means for the user in about 100 words, "
-        "using simple and natural language."
-    )
+    f"Current state: {current_state}\n"
+    f"Predicted next action: {next_state}\n"
+    f"Detected keywords: {', '.join([k for k, v in keywords.items() if v]) or 'None'}\n\n"
+    "Write one clear, direct paragraph (~100 words) explaining what the predicted next action means for the user. "
+    "Do not describe your task or say what you will do—just give the explanation naturally and conversationally."
+)
+
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
