@@ -40,10 +40,10 @@ def extract_keywords(text):
     }
 
 def predict_next_action(keywords):
-    """Markov-based next-action prediction."""
+    """Markov-based next-action prediction with safe probability handling."""
     
-    # Determine current state based on keywords
-    if keywords.get("ai") or keywords.get("data") or keywords.get("developer"):
+    # Determine current state based on detected keywords
+    if any([keywords.get(k) for k in ("ai", "data", "developer")]):
         current_state = "Ask for Technical Explanation"
     elif keywords.get("research"):
         current_state = "Philosophical or Global Inquiry"
@@ -52,17 +52,20 @@ def predict_next_action(keywords):
     elif keywords.get("job"):
         current_state = "Career or Relocation Question"
     else:
-        current_state = random.choice(list(transition_matrix.keys()))
+        current_state = random.choice(states)
+
+    # Fetch probabilities safely
+    probs = transition_matrix.get(current_state)
+    if not probs:
+        probs = [1.0 / len(states)] * len(states)
+    elif len(probs) < len(states):
+        probs += [0.0] * (len(states) - len(probs))
     
-    # Get probability list and ensure it matches the states length
-    probs = transition_matrix.get(current_state, [1.0/len(states)]*len(states))
-    if len(probs) < len(states):
-        probs += [0.0] * (len(states) - len(probs))  # pad missing probabilities
-    
-    # Pick next state based on probabilities
+    # Predict next state
     next_state = random.choices(states, weights=probs, k=1)[0]
     
     return current_state, next_state, probs, states
+
 
 # Example usage
 if __name__ == "__main__":
