@@ -1,77 +1,133 @@
 # utils/llm_utils.py
-import streamlit as st, requests, json, traceback
+import streamlit as st
+import requests
+import json
+import re
+import traceback
 from utils import markov_model
 
+# -------------------------------------------------------------
+# 🔑  Configuration
+# -------------------------------------------------------------
 GROQ_URL = "https://api.groq.com/openai/v1/responses"
 MODEL = "openai/gpt-oss-20b"
 
+# -------------------------------------------------------------
+# ⚙️  Helper Functions
+# -------------------------------------------------------------
 def _safe_call(prompt, timeout=60):
+    """Send a request to the Groq API and handle HTTP errors gracefully."""
     key = st.secrets.get("GROQ_API_KEY")
     if not key:
-        raise RuntimeError("Missing GROQ_API_KEY in Streamlit secrets.")
-    h = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        raise RuntimeError("⚠️ Missing GROQ_API_KEY in Streamlit secrets.")
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     body = {"model": MODEL, "input": prompt}
-    r = requests.post(GROQ_URL, headers=h, json=body, timeout=timeout)
+    r = requests.post(GROQ_URL, headers=headers, json=body, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
-def _extract_text(j):
-    if "output_text" in j and j["output_text"]:
-        return j["output_text"].strip()
-    if "output" in j and j["output"]:
-        txt = []
-        for o in j["output"]:
-            for c in o.get("content", []):
+def _extract_text(resp_json):
+    """Extract main text content from Groq response object."""
+    if not resp_json:
+        return ""
+    if "output_text" in resp_json and resp_json["output_text"]:
+        return resp_json["output_text"].strip()
+    if "output" in resp_json and resp_json["output"]:
+        pieces = []
+        for item in resp_json["output"]:
+            for c in item.get("content", []):
                 if "text" in c:
-                    txt.append(c["text"])
-        return "\n".join(txt).strip()
-    return str(j)
+                    pieces.append(c["text"])
+        return "\n".join(pieces).strip()
+    return str(resp_json)
 
+def _try_parse_json(raw_text):
+    """
+    Robust JSON parser that extracts the first valid JSON block from an LLM response.
+    Works even if the response has text before/after the JSON.
+    """
+    if not raw_text or not isinstance(raw_text, str):
+        return None
+
+    # Extract {...} block
+    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # Extract [...] block
+    match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+# -------------------------------------------------------------
+# 🧠  Core Predictor
+# -------------------------------------------------------------
 def universal_predictor(user_text):
     """
-    Dynamic pipeline:
-    1. LLM infers domain + possible states + current state.
-    2. Markov predicts next state.
-    3. LLM summarizes result.
+    Universal LLM + Markov hybrid predictor.
+    Handles arbitrary text domains (career, finance, health, learning, etc.).
     """
     result = {"input": user_text}
     try:
-        # --- 1. Ask LLM for domain and states
+        # --- 1️⃣ Ask LLM to identify domain, states, and current state
         prompt = (
-            "Analyze this text and output JSON with keys:\n"
-            "'domain' (string, short category like finance, career, health, learning, etc.),\n"
-            "'states' (ordered list of 4–8 progressive states representing this context),\n"
-            "'current_state' (string, one item from states that best fits current situation).\n"
-            "Return only JSON.\n\n"
+            "Analyze this input and respond strictly in JSON format with keys:\n"
+            "'domain': short string (e.g., 'career', 'finance', 'health', 'learning', 'other'),\n"
+            "'states': ordered list (4–8 progressive states relevant to the context),\n"
+            "'current_state': one of the states that best matches current situation.\n\n"
+            "Return ONLY JSON. The first character of your response must be '{'.\n\n"
             f"Input:\n{user_text}"
         )
         j = _safe_call(prompt)
         raw = _extract_text(j)
-        parsed = json.loads(raw)
+        parsed = _try_parse_json(raw)
+
+        # If parsing failed, attempt a repair prompt
+        if not parsed:
+            repair_prompt = (
+                f"The following output is not valid JSON:\n{raw}\n\n"
+                "Reformat it strictly as valid JSON. Do not add any explanation."
+            )
+            j2 = _safe_call(repair_prompt)
+            raw2 = _extract_text(j2)
+            parsed = _try_parse_json(raw2)
+
+        if not parsed:
+            raise ValueError(f"Groq returned non-JSON or empty output:\n{raw}")
+
         states = parsed.get("states", [])
         current = parsed.get("current_state")
         if not states or not current:
-            raise ValueError("LLM did not return states/current_state")
+            raise ValueError(f"LLM JSON missing 'states' or 'current_state':\n{parsed}")
 
-        # --- 2. Build uniform Markov if none given
+        # --- 2️⃣ Markov step: predict next probable state
         matrix = markov_model.build_uniform_matrix(states)
         pred = markov_model.predict_next_state(states, matrix, current, deterministic=True)
         if "error" in pred:
             raise RuntimeError(pred["error"])
         next_state = pred["next_state"]
 
-        # --- 3. Ask LLM to interpret prediction
-        prompt2 = (
+        # --- 3️⃣ Ask LLM for contextual explanation
+        explain_prompt = (
             f"Domain: {parsed.get('domain')}\n"
             f"Current state: {current}\nNext state: {next_state}\n\n"
             f"User text:\n{user_text}\n\n"
-            "Write a short paragraph (80–120 words) explaining in plain language "
-            "why moving from the current state to the next state is a reasonable progression. "
-            "Avoid meta-commentary or instructions."
+            "Write one clear paragraph (80–120 words) explaining naturally "
+            "why moving from the current state to the next state makes sense. "
+            "Avoid mentioning tasks or instructions; sound human and insightful."
         )
-        j2 = _safe_call(prompt2)
-        explanation = _extract_text(j2)
+        j3 = _safe_call(explain_prompt)
+        explanation = _extract_text(j3)
 
+        # --- 4️⃣ Return structured result
         result.update({
             "domain": parsed.get("domain"),
             "states": states,
@@ -79,6 +135,8 @@ def universal_predictor(user_text):
             "predicted_next_state": next_state,
             "explanation": explanation,
         })
+
     except Exception as e:
         result["error"] = f"Universal predictor failed: {e}\n{traceback.format_exc()}"
+
     return result
